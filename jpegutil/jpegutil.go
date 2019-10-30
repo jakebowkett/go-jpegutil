@@ -300,8 +300,8 @@ func closeFile(c io.Closer, err *error) {
 
 /*
 WriteFile drains r and writes it to a new file
-at name, returning the bytes it wrote and an
-error, if any.
+at name, returning the number of bytes it wrote
+and an error, if any.
 
 If name doesn't already end in ".jpg" or ".jpeg"
 WriteFile will add ".jpg" to the end.
@@ -329,8 +329,8 @@ func WriteFile(name string, r io.Reader) (n int64, err error) {
 
 	for {
 		count, err := tr.Read(p)
+		n += int64(count)
 		if errors.Is(err, io.EOF) {
-			n += int64(count)
 			break
 		}
 		if err != nil {
