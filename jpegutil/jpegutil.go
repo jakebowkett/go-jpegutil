@@ -308,7 +308,7 @@ WriteFile will add ".jpg" to the end.
 */
 func WriteFile(name string, r io.Reader) (n int64, err error) {
 
-	if ext := filepath.Ext(name); !(ext == "jpg" || ext == "jpeg") {
+	if ext := filepath.Ext(name); !(ext == ".jpg" || ext == ".jpeg") {
 		name = strings.TrimRight(name, ".")
 		name += ".jpg"
 	}
