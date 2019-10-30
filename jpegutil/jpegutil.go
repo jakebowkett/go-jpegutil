@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Various JPEG header markers.
@@ -85,7 +86,7 @@ var tagMarker = map[tag][]byte{
 
 /*
 SetMeta takes a JPEG file represented by rs and returns
-a reader r which is the same file with its EXIF data
+a reader r which is the same file with its Exif data
 replaced with the supplied metadata tags and their values.
 The resulting image represented by r is not re-compressed.
 
@@ -120,16 +121,17 @@ func SetMeta(rs io.ReadSeeker, md MetaData) (r io.Reader, err error) {
 	var sorted []int
 
 	/*
-		We need ifdOffset to create pointers to the data
-		below. We also need APP1's segment length so we
-		finish calculating while also ensuring a canonical
-		ordering of the tags.
+		We need ifdOffset to create pointers to the tag
+		data below. We also need APP1's segment length so
+		we finish calculating that while also ensuring a
+		canonical ordering of the tags. (Ordering is not
+		required by spec but hey why not).
 	*/
 	ifdOffset := 0
 	ifdOffset += len(tiff)      //  8  bytes - Tiff header
-	ifdOffset += 2              //  2  bytes - Number of IFD0 directory entries
-	ifdOffset += (len(md) * 12) // 12+ bytes - Entries
-	ifdOffset += len(ifd0Next)  //  4  bytes - Pointer to next IFD directory
+	ifdOffset += 2              //  2  bytes - Number of IFD0 entries
+	ifdOffset += (len(md) * 12) // 12+ bytes - Entries = num of entries * 12 bytes
+	ifdOffset += len(ifd0Next)  //  4  bytes - Pointer to next IFD
 
 	app1Len := 0
 	app1Len += 4         // APP1 marker + length
@@ -148,19 +150,24 @@ func SetMeta(rs io.ReadSeeker, md MetaData) (r io.Reader, err error) {
 
 	buf.Write(soi)
 	buf.Write(app1)
-	buf.Write(p.bytes(app1Len, 2)) // APP1 length.
+	buf.Write(p.bytes(app1Len, 2))
 	buf.Write(exif)
 	buf.Write(tiff)
-	buf.Write(p.bytes(len(md), 2)) // Number of IFD0 directory entries.
+	buf.Write(p.bytes(len(md), 2)) // Number of IFD0 entries.
 
-	// Begin appending exif tags.
+	/*
+		Begin appending Exif entries. All entries are 12 bytes
+		and contain pointers to their data, therefore we must
+		collect that data and write it after the entries and
+		the pointer to the next IFD.
+	*/
 	var data []byte
 	for _, t := range sorted {
 
 		// Write tag and its type.
 		buf.Write(tagMarker[tag(t)])
 
-		// Value associated with tag - we add terminating NULL byte for ascii strings.
+		// Data associated with tag - we add terminating NULL byte for ascii strings.
 		newData := append([]byte(md[tag(t)]), 0x00)
 
 		// Collect new data - we can't write it yet.
@@ -186,20 +193,24 @@ func SetMeta(rs io.ReadSeeker, md MetaData) (r io.Reader, err error) {
 	buf.Write(segPad)
 
 	/*
-		Set rs to the start of DQT segment so it
-		transitions to that after our metadata.
+		Set rs to the start of DQT segment so it transitions
+		to that after our metadata with the multireader.
 	*/
 	if err = p.seekToDQT(rs); err != nil {
 		return nil, err
 	}
 
+	/*
+		Return a concatenation of our new metadata and the
+		existing image data from the original JPEG source.
+	*/
 	return io.MultiReader(bytes.NewReader(buf.Bytes()), rs), nil
 }
 
 /*
 scratch is for writing bytes to when converting integers
 to bytes as well as for reading segment markers and their
-lengths to.
+lengths to. Methods of scratch assume it is 4 bytes long.
 */
 type scratch []byte
 
@@ -217,7 +228,9 @@ func (p scratch) bytes(n, byteCount int) []byte {
 
 /*
 seekToDQT seeks a JPEG file represented by rs to
-the start of the first DQT marker.
+the start of the first DQT marker. It assumes it
+is being passed a JPEG file and does not check
+to verify.
 */
 func (p scratch) seekToDQT(rs io.ReadSeeker) (err error) {
 
@@ -236,7 +249,7 @@ func (p scratch) seekToDQT(rs io.ReadSeeker) (err error) {
 			return errors.New("jpegutil: couldn't read next segment marker and length")
 		}
 
-		// Break on hitting DQT marker
+		// Break if we've hit the DQT marker
 		if bytes.Equal(p[0:2], dqt) {
 			break
 		}
@@ -247,18 +260,17 @@ func (p scratch) seekToDQT(rs io.ReadSeeker) (err error) {
 		/*
 			Segment length at a minimum could be:
 
-				2  bytes - header
 				2  bytes - length
 				1+ bytes - payload
 				1  byte  - terminator
 				1  byte  - following header prefix
 
-				7+ bytes - total
+				5+ bytes - total
 
 			We assume a payload of at least 2 bytes
-			below (for a total segment length of 8).
+			below (for a total segment length of 6).
 		*/
-		if segLen < 8 {
+		if segLen < 6 {
 			return errors.New("jpegutil: reported segment length too small")
 		}
 		if _, err = rs.Seek(segLen, io.SeekCurrent); err != nil {
@@ -290,8 +302,16 @@ func closeFile(c io.Closer, err *error) {
 WriteFile drains r and writes it to a new file
 at name, returning the bytes it wrote and an
 error, if any.
+
+If name doesn't already end in ".jpg" or ".jpeg"
+WriteFile will add ".jpg" to the end.
 */
 func WriteFile(name string, r io.Reader) (n int64, err error) {
+
+	if ext := filepath.Ext(name); !(ext == "jpg" || ext == "jpeg") {
+		name = strings.TrimRight(name, ".")
+		name += ".jpg"
+	}
 
 	name, err = filepath.Abs(name)
 	if err != nil {
