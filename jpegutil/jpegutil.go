@@ -1,6 +1,7 @@
 /*
 Package jpegutil provides a simple way to handle some common
-jpeg tasks such as stripping/changing metadata.
+tasks with JPEGs such as replacing metadata and checking magic
+bytes.
 */
 package jpegutil
 
@@ -29,7 +30,7 @@ var (
 )
 
 /*
-Assert returns an error if r doesn't represent
+Assert returns an error if rs doesn't represent
 a valid JPEG image. It checks for the SOI and
 EOI byte markers without reading the entire file.
 
@@ -67,7 +68,7 @@ func Assert(rs io.ReadSeeker) (err error) {
 	return nil
 }
 
-type MetaData map[tag]string
+type Metadata map[tag]string
 
 type tag int
 
@@ -85,7 +86,7 @@ var tagMarker = map[tag][]byte{
 }
 
 /*
-SetMeta takes a JPEG file represented by rs and returns
+ReplaceMeta takes a JPEG file represented by rs and returns
 a reader r which is the same file with its Exif data
 replaced with the supplied metadata tags and their values.
 The resulting image represented by r is not re-compressed.
@@ -93,15 +94,15 @@ The resulting image represented by r is not re-compressed.
 A zero-length md will result in r having no metadata at all.
 
 The APP1 container wrapping the tags must not exceed 64kb.
-SetMeta calls Assert and will error under the same conditions.
+ReplaceMeta calls Assert and will error under the same conditions.
 It is unnecessary for callers to call Assert if they intend
-to immediately follow with SetMeta.
+to immediately follow with ReplaceMeta.
 
 Since r is a wrapper around the new metadata and rs, altering
 rs will affect r. Therefore callers are recommended to drain
 r before altering rs.
 */
-func SetMeta(rs io.ReadSeeker, md MetaData) (r io.Reader, err error) {
+func ReplaceMeta(rs io.ReadSeeker, md Metadata) (r io.Reader, err error) {
 
 	if err = Assert(rs); err != nil {
 		return nil, err
@@ -173,7 +174,7 @@ func SetMeta(rs io.ReadSeeker, md MetaData) (r io.Reader, err error) {
 		// Collect new data - we can't write it yet.
 		data = append(data, newData...)
 
-		// Convert integer length of payload into a byte array.
+		// Convert integer length of payload into a byte slice.
 		buf.Write(p.bytes(len(newData), 4))
 
 		// Write pointer to payload.
@@ -223,7 +224,7 @@ func (p scratch) bytes(n, byteCount int) []byte {
 		binary.BigEndian.PutUint32(p, uint32(n))
 		return p
 	}
-	panic("jpegutil: unexpected byteCount value")
+	panic("jpegutil: unexpected byteCount")
 }
 
 /*
@@ -315,12 +316,12 @@ func WriteFile(name string, r io.Reader) (n int64, err error) {
 
 	name, err = filepath.Abs(name)
 	if err != nil {
-		return n, err
+		return n, fmt.Errorf("jpegutil: %w", err)
 	}
 
 	f, err := os.Create(name)
 	if err != nil {
-		return n, err
+		return n, fmt.Errorf("jpegutil: %w", err)
 	}
 	defer closeFile(f, &err)
 
@@ -334,7 +335,7 @@ func WriteFile(name string, r io.Reader) (n int64, err error) {
 			break
 		}
 		if err != nil {
-			return n, err
+			return n, fmt.Errorf("jpegutil: %w", err)
 		}
 	}
 
