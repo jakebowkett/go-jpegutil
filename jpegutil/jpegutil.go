@@ -34,11 +34,24 @@ Assert returns an error if rs doesn't represent
 a valid JPEG image. It checks for the SOI and
 EOI byte markers without reading the entire file.
 
-If the current offset of rs is important to the
-caller it should be stored somewhere as Assert
-does not attempt to restore the original offset.
+The current offset of rs is restored after Assert
+has completed its checks.
 */
 func Assert(rs io.ReadSeeker) (err error) {
+
+	/*
+		Return seek offset to current position
+		after we're done with it.
+	*/
+	offset, err := rs.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if _, sErr := rs.Seek(offset, io.SeekStart); sErr != nil {
+			err = fmt.Errorf("jpegutil: %w: %s", err, sErr.Error())
+		}
+	}()
 
 	if _, err := rs.Seek(0, io.SeekStart); err != nil {
 		return err
